@@ -23,13 +23,13 @@ This was chosen because it gave the best practical result in comparison tests:
 - `ffprobe`
 - `exiftool` for 360 metadata tagging
 
-On this Mac, `exiftool` was available through Hugin:
+On macOS with Homebrew:
 
-```text
-/Applications/Hugin/HuginStitchProject.app/Contents/Resources/ExifTool/exiftool
+```bash
+brew install ffmpeg exiftool
 ```
 
-If `exiftool` is missing, the videos still convert, but Final Cut may not automatically recognize them as 360/equirectangular clips.
+The script looks for `exiftool` in `PATH` first. If it is missing, the videos still convert, but Final Cut may not automatically recognize them as 360/equirectangular clips.
 
 ## Usage
 
@@ -41,8 +41,8 @@ Example:
 
 ```bash
 ./convert_gear360.sh \
-  "/Users/michael/Movies/Gear360 Raw" \
-  "/Users/michael/Movies/Gear360 Stitched"
+  "/Users/michael/Movies/gear360_raw" \
+  "/Users/michael/Movies/gear360_stitched"
 ```
 
 The script converts `.MP4` and `.mp4` files in the input folder only. It does not recurse into subfolders.
