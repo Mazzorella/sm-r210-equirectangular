@@ -10,6 +10,7 @@ CRF="18"
 PRESET="medium"
 FORCE="no"
 OUTPUT_MODE="h264"
+PROGRESS_BAR_WIDTH=24
 
 usage() {
   cat <<EOF
@@ -74,6 +75,81 @@ tag_360_metadata() {
     -XMP-GSpherical:CroppedAreaLeftPixels=0 \
     -XMP-GSpherical:CroppedAreaTopPixels=0 \
     "$file" >/dev/null
+}
+
+format_seconds() {
+  local seconds="$1"
+  local whole=$((seconds))
+  local hours=$((whole / 3600))
+  local minutes=$(((whole % 3600) / 60))
+  local secs=$((whole % 60))
+
+  if [ "$hours" -gt 0 ]; then
+    printf '%d:%02d:%02d' "$hours" "$minutes" "$secs"
+  else
+    printf '%d:%02d' "$minutes" "$secs"
+  fi
+}
+
+progress_bar() {
+  local percent="$1"
+  local filled=$((percent * PROGRESS_BAR_WIDTH / 100))
+  local empty=$((PROGRESS_BAR_WIDTH - filled))
+  local bar=""
+  local i
+
+  for ((i = 0; i < filled; i++)); do
+    bar="${bar}#"
+  done
+  for ((i = 0; i < empty; i++)); do
+    bar="${bar}-"
+  done
+
+  printf '[%s]' "$bar"
+}
+
+get_duration_us() {
+  local file="$1"
+  local duration
+
+  duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$file")"
+  awk -v duration="$duration" 'BEGIN { printf "%.0f", duration * 1000000 }'
+}
+
+run_ffmpeg_with_progress() {
+  local index="$1"
+  local total="$2"
+  local input="$3"
+  local label="$4"
+  local duration_us="$5"
+  shift 5
+
+  local line key value out_time_us percent elapsed total_seconds
+  total_seconds=$((duration_us / 1000000))
+
+  while IFS= read -r line; do
+    key="${line%%=*}"
+    value="${line#*=}"
+
+    case "$key" in
+      out_time_us)
+        out_time_us="$value"
+        if [ "$duration_us" -gt 0 ] && [ "$out_time_us" -ge 0 ] 2>/dev/null; then
+          percent=$((out_time_us * 100 / duration_us))
+          [ "$percent" -gt 100 ] && percent=100
+          elapsed="$(format_seconds $((out_time_us / 1000000)))"
+          printf '\r[%d/%d] %-35s %s %3d%% (%s / %s)' \
+            "$index" "$total" "$label" "$(progress_bar "$percent")" "$percent" "$elapsed" "$(format_seconds "$total_seconds")"
+        fi
+        ;;
+      progress)
+        if [ "$value" = "end" ]; then
+          printf '\r[%d/%d] %-35s %s 100%% (%s / %s)\n' \
+            "$index" "$total" "$label" "$(progress_bar 100)" "$(format_seconds "$total_seconds")" "$(format_seconds "$total_seconds")"
+        fi
+        ;;
+    esac
+  done < <(ffmpeg -hide_banner -loglevel error -nostats -y "$@" -progress pipe:1)
 }
 
 while [ "$#" -gt 0 ]; do
@@ -141,9 +217,16 @@ echo "Files found:   ${#FILES[@]}"
 echo "Mode:          $OUTPUT_MODE"
 echo
 
-for input in "${FILES[@]}"; do
+total_files="${#FILES[@]}"
+converted=0
+skipped=0
+failed=0
+
+for index in "${!FILES[@]}"; do
+  input="${FILES[$index]}"
   filename="$(basename "$input")"
   stem="${filename%.*}"
+  file_number=$((index + 1))
 
   if [ "$OUTPUT_MODE" = "prores" ]; then
     output="$OUTPUT_DIR/${stem}_equirect.mov"
@@ -156,17 +239,26 @@ for input in "${FILES[@]}"; do
   fi
 
   if [ -e "$output" ] && [ "$FORCE" != "yes" ]; then
-    echo "Skipping existing output: $output"
+    printf '[%d/%d] Skipping existing output: %s\n' "$file_number" "$total_files" "$output"
+    skipped=$((skipped + 1))
     continue
   fi
 
-  echo "Converting: $filename"
-  ffmpeg -y \
+  duration_us="$(get_duration_us "$input")"
+
+  if run_ffmpeg_with_progress "$file_number" "$total_files" "$input" "$filename" "$duration_us" \
     -i "$input" \
     -vf "v360=input=dfisheye:output=equirect:ih_fov=${INPUT_FOV_H}:iv_fov=${INPUT_FOV_V}:interp=${INTERP}" \
     "${video_args[@]}" \
     "${audio_args[@]}" \
-    "$output"
+    "$output"; then
+    converted=$((converted + 1))
+  else
+    echo
+    echo "Error: ffmpeg failed for $input" >&2
+    failed=$((failed + 1))
+    continue
+  fi
 
   dimensions="$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x "$output")"
   width="${dimensions%x*}"
@@ -177,4 +269,5 @@ for input in "${FILES[@]}"; do
   echo
 done
 
-echo "Done."
+echo "Done. Converted: $converted, skipped: $skipped, failed: $failed."
+[ "$failed" -eq 0 ] || exit 1
