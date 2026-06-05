@@ -43,9 +43,14 @@ The `.gitignore` intentionally excludes common media formats and scratch output 
 
 ## Releases
 
-Releases are usable checkpoints, not every commit.
+Releases are usable checkpoints, not every commit. This project uses Semantic Versioning:
 
-- Use `v0.X.0` for meaningful workflow milestones.
-- Use `v0.X.Y` for fixes to that milestone.
+```text
+MAJOR.MINOR.PATCH
+```
+
+- Increment `MAJOR` for incompatible command-line or output behavior changes.
+- Increment `MINOR` for new flags, converter capabilities, or workflow features.
+- Increment `PATCH` for bug fixes, documentation corrections, and maintenance.
 - Do not move existing release tags.
 - Update release notes with the practical changes users need to know about.
