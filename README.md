@@ -53,6 +53,19 @@ Outputs are named:
 original_name_equirect.mp4
 ```
 
+## Safe Resume Behavior
+
+Completed outputs are skipped by default. If a run is interrupted, the active conversion is written to a temporary file and is not promoted to the final output name until conversion and metadata tagging succeed.
+
+On startup, the script removes stale temporary outputs from earlier interrupted runs:
+
+```text
+*_equirect.tmp.mp4
+*_equirect.tmp.mov
+```
+
+Use `--force` to rerun files that already have completed outputs.
+
 ## Options
 
 ```text

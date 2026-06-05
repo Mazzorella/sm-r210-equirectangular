@@ -11,6 +11,7 @@ PRESET="medium"
 FORCE="no"
 OUTPUT_MODE="h264"
 PROGRESS_BAR_WIDTH=24
+ACTIVE_TEMP_OUTPUT=""
 
 usage() {
   cat <<EOF
@@ -35,6 +36,21 @@ die() {
   echo "Error: $*" >&2
   exit 1
 }
+
+cleanup_active_temp() {
+  if [ -n "$ACTIVE_TEMP_OUTPUT" ] && [ -e "$ACTIVE_TEMP_OUTPUT" ]; then
+    rm -f "$ACTIVE_TEMP_OUTPUT"
+  fi
+}
+
+handle_interrupt() {
+  echo
+  echo "Interrupted. Removing active temporary output." >&2
+  cleanup_active_temp
+  exit 130
+}
+
+trap handle_interrupt INT TERM
 
 find_exiftool() {
   if command -v exiftool >/dev/null 2>&1; then
@@ -196,6 +212,7 @@ OUTPUT_DIR="${2%/}"
 
 [ -d "$INPUT_DIR" ] || die "input folder does not exist: $INPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
+rm -f "$OUTPUT_DIR"/*_equirect.tmp.mp4 "$OUTPUT_DIR"/*_equirect.tmp.mov
 
 command -v ffmpeg >/dev/null 2>&1 || die "ffmpeg is required"
 command -v ffprobe >/dev/null 2>&1 || die "ffprobe is required"
@@ -230,10 +247,12 @@ for index in "${!FILES[@]}"; do
 
   if [ "$OUTPUT_MODE" = "prores" ]; then
     output="$OUTPUT_DIR/${stem}_equirect.mov"
+    temp_output="$OUTPUT_DIR/${stem}_equirect.tmp.mov"
     video_args=(-c:v prores_ks -profile:v 2 -pix_fmt yuv422p10le -vendor apl0)
     audio_args=(-c:a pcm_s16le)
   else
     output="$OUTPUT_DIR/${stem}_equirect.mp4"
+    temp_output="$OUTPUT_DIR/${stem}_equirect.tmp.mp4"
     video_args=(-c:v libx264 -crf "$CRF" -preset "$PRESET")
     audio_args=(-c:a aac -b:a 192k)
   fi
@@ -245,26 +264,53 @@ for index in "${!FILES[@]}"; do
   fi
 
   duration_us="$(get_duration_us "$input")"
+  rm -f "$temp_output"
+  ACTIVE_TEMP_OUTPUT="$temp_output"
 
   if run_ffmpeg_with_progress "$file_number" "$total_files" "$input" "$filename" "$duration_us" \
     -i "$input" \
     -vf "v360=input=dfisheye:output=equirect:ih_fov=${INPUT_FOV_H}:iv_fov=${INPUT_FOV_V}:interp=${INTERP}" \
     "${video_args[@]}" \
     "${audio_args[@]}" \
-    "$output"; then
-    converted=$((converted + 1))
+    "$temp_output"; then
+    :
   else
     echo
     echo "Error: ffmpeg failed for $input" >&2
+    cleanup_active_temp
+    ACTIVE_TEMP_OUTPUT=""
     failed=$((failed + 1))
     continue
   fi
 
-  dimensions="$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x "$output")"
+  if ! dimensions="$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x "$temp_output")"; then
+    echo "Error: could not read output dimensions for $temp_output" >&2
+    cleanup_active_temp
+    ACTIVE_TEMP_OUTPUT=""
+    failed=$((failed + 1))
+    continue
+  fi
   width="${dimensions%x*}"
   height="${dimensions#*x}"
 
-  tag_360_metadata "$output" "$width" "$height"
+  if ! tag_360_metadata "$temp_output" "$width" "$height"; then
+    echo "Error: metadata tagging failed for $temp_output" >&2
+    cleanup_active_temp
+    ACTIVE_TEMP_OUTPUT=""
+    failed=$((failed + 1))
+    continue
+  fi
+
+  if ! mv -f "$temp_output" "$output"; then
+    echo "Error: could not move temporary output into place: $output" >&2
+    cleanup_active_temp
+    ACTIVE_TEMP_OUTPUT=""
+    failed=$((failed + 1))
+    continue
+  fi
+
+  ACTIVE_TEMP_OUTPUT=""
+  converted=$((converted + 1))
   echo "Wrote: $output"
   echo
 done
